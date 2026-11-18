@@ -4,9 +4,12 @@ import com.sameer.sdl.system_design_labs.model.Product;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+
+import java.util.Optional;
 
 @Service
 public class ProductService {
@@ -28,15 +31,19 @@ public class ProductService {
         ).stream().findFirst().orElse(null);
     }
 
-    @CacheEvict(cacheNames = "products", key = "#p0", condition = "#result")
-    public boolean updateName(long id,  String name){
-        boolean updated = jdbc.update(
+    @CachePut(cacheNames = "products", key = "#p0", unless = "#result == null")
+    public Optional<Product> updateName(long id, String name) {
+        int updatedRows = jdbc.update(
                 "UPDATE products SET name = ? WHERE id = ?",
                 name, id
-        ) > 0;
-        if (updated) {
-            log.info("updateName: Updated product {} in PostgreSQL. Will evict its Redis cache entry.", id);
+        );
+
+        if (updatedRows == 0) {
+            return Optional.empty();
         }
-        return updated;
+
+        log.info("updateName: Updated product {} in PostgreSQL. Will refresh its Redis cache entry.", id);
+
+        return Optional.of(new Product(id, name));
     }
 }

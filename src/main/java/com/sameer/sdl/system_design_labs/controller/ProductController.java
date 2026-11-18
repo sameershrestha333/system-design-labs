@@ -7,6 +7,8 @@ import org.springframework.http.RequestEntity;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Optional;
+
 @RestController
 @RequestMapping("/products")
 public class ProductController {
@@ -29,8 +31,8 @@ public class ProductController {
             return ResponseEntity.badRequest().build();
         }
 
-        boolean updated = productService.updateName(id, request.name());
+        var optProduct = productService.updateName(id, request.name());
 
-        return updated ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+        return optProduct.isPresent() ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 }
