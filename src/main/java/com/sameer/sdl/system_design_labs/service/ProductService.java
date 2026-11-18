@@ -21,7 +21,7 @@ public class ProductService {
         this.jdbc = jdbc;
     }
 
-    @Cacheable(cacheNames = "products", unless = "#result == null")
+    @Cacheable(cacheNames = "products", sync = true)
     public Product findById(long id) {
         log.info("findById: Cache miss for product {}. Querying PostgreSQL.", id);
         return jdbc.query(
