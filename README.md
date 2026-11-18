@@ -10,6 +10,7 @@ Hands-on system design exercises built with Java 21 and Spring Boot. Each lab im
 | Redis cache invalidation | Update a product in PostgreSQL and remove its cached copy with `@CacheEvict`. The next read fetches and caches the updated product. (Lab 2) |
 | Redis cache refresh | Update PostgreSQL and replace the cached product with `@CachePut`. The next read gets the updated value from Redis. (Lab 3, current implementation) |
 | Redis cache stampede prevention | Use `@Cacheable(sync = true)` with a locking Redis writer. In a test with 10 concurrent requests for the same uncached product, PostgreSQL queries dropped from 10 to 1. |
+| Redis negative caching | Cache missing products for 30 seconds. Repeat requests return `404` without another PostgreSQL query. |
 
 ## Redis and PostgreSQL
 
