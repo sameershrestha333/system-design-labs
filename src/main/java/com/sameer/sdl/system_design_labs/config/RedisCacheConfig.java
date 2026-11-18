@@ -9,6 +9,7 @@ import org.springframework.data.redis.cache.RedisCacheWriter;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 
 import java.time.Duration;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Configuration
 public class RedisCacheConfig {
@@ -21,8 +22,12 @@ public class RedisCacheConfig {
         // Lock while loading: one request fetches the missing product from PostgreSQL while the others wait.
         var writer = RedisCacheWriter.lockingRedisCacheWriter(connectionFactory);
 
-        // Keep it for 30 seconds: the cached product expires after the TTL set in application.properties.
-        var defaults = RedisCacheConfiguration.defaultCacheConfig().entryTtl(ttl);
+        // Spread out expirations by adding or subtracting up to five seconds from the base TTL.
+        var defaults = RedisCacheConfiguration.defaultCacheConfig()
+                .entryTtl((key, value) -> {
+                    var jitterSeconds = ThreadLocalRandom.current().nextInt(-5, 6);
+                    return ttl.plusSeconds(jitterSeconds);
+                });
 
         return RedisCacheManager.builder(writer)
                 .cacheDefaults(defaults)
