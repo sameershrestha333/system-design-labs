@@ -12,6 +12,7 @@ Hands-on system design exercises built with Java 21 and Spring Boot. Each lab im
 | Redis cache stampede prevention | Use `@Cacheable(sync = true)` with a locking Redis writer. In a test with 10 concurrent requests for the same uncached product, PostgreSQL queries dropped from 10 to 1. |
 | Redis negative caching | Cache missing products for 25–35 seconds. Repeat requests return `404` without another PostgreSQL query. |
 | Redis TTL jitter | Vary the 30-second base TTL by up to five seconds in either direction. This spreads out expirations and helps reduce database load spikes. |
+| Redis rate limiting | Allow five product GET requests per client in a 60-second window. Redis runs a Lua script to update the counter and expiration atomically. |
 
 ## Redis and PostgreSQL
 
@@ -31,7 +32,7 @@ The API runs at `http://localhost:8080`. On startup, Spring Boot creates the pro
 
 ## Try it in Bruno
 
-Use `http://localhost:8080/products/123` for both requests. Send PUT with a JSON body such as `{"name":"Wireless Keyboard"}`. Choose a different name from the current one so the change is visible.
+Use `http://localhost:8080/products/123` for both requests. For GET, set `X-Client-Id` to a fresh test value in Bruno. Send PUT with a JSON body such as `{"name":"Wireless Keyboard"}`. Choose a different name from the current one so the change is visible.
 
 | Request | Expected result |
 | --- | --- |
@@ -42,3 +43,9 @@ Use `http://localhost:8080/products/123` for both requests. Send PUT with a JSON
 | Repeat GET within 25 seconds | The updated product comes from Redis. |
 
 To test expiration separately, wait more than 35 seconds after a cache fill, then send another GET. It should query PostgreSQL again.
+
+### Test the rate limit
+
+Send six GET requests within 60 seconds using the same fresh `X-Client-Id`. The first five return `200 OK`. The sixth returns `429 Too Many Requests` with a `Retry-After` header in seconds.
+
+Send a GET with a different client ID to verify that it has its own counter. The original client can send requests again after its window expires. A GET without the client header returns `400 Bad Request`. The header simulates client identity for this lab.
