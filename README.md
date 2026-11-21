@@ -14,6 +14,7 @@ Hands-on system design exercises built with Java 21 and Spring Boot. Each lab im
 | Redis TTL jitter | Vary the 30-second base TTL by up to five seconds in either direction. This spreads out expirations and helps reduce database load spikes. |
 | Redis rate limiting | Allow five product GET requests per client in a 60-second window. Redis runs a Lua script to update the counter and expiration atomically. |
 | PostgreSQL monthly partitioning | Route kiosk transactions into monthly partitions by sale date. |
+| Read replicas for kiosk reporting | Explore how checkout writes and ADM report reads use separate databases. |
 
 ## PostgreSQL monthly partitioning
 
@@ -32,6 +33,22 @@ Get-Content -Raw .\labs\partitioning\monthly-sales.sql | docker compose exec -T 
 ```
 
 The script inserts four sales. The January query returns two rows: January 10 (20.00) and January 31 (30.00).
+
+## Lab 2 — Read replicas for kiosk reporting
+
+A **read replica** is a copy of the primary database that receives its changes and serves read queries. Kiosks save sales to the primary, and ADM reads from the replica to build reports.
+
+```text
+Kiosk checkout ──writes sales──▶ Primary database
+                                       │
+                                 copies changes
+                                       ▼
+ADM reports ────read sales from──▶ Read replica
+```
+
+**Benefit:** Running reports on the replica leaves the primary more capacity for checkout.
+
+**Trade-off:** A new sale may take a moment to appear in a report. This delay is called **replication lag**.
 
 ## Redis and PostgreSQL
 
