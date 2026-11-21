@@ -13,42 +13,59 @@ Hands-on system design exercises built with Java 21 and Spring Boot. Each lab im
 | Redis negative caching | Cache missing products for 25–35 seconds. Repeat requests return `404` without another PostgreSQL query. |
 | Redis TTL jitter | Vary the 30-second base TTL by up to five seconds in either direction. This spreads out expirations and helps reduce database load spikes. |
 | Redis rate limiting | Allow five product GET requests per client in a 60-second window. Redis runs a Lua script to update the counter and expiration atomically. |
-| PostgreSQL monthly partitioning | Route kiosk transactions into monthly partitions by sale date. |
-| Read replicas for kiosk reporting | Explore how checkout writes and ADM report reads use separate databases. |
+| Lab 1 — PostgreSQL monthly partitioning | Route kiosk transactions into monthly partitions by sale date. |
+| Lab 2 — Read replicas | Design exercise on offloading ADM reports and understanding replica lag. |
+| Lab 3 — Location-based sharding | Design exercise on routing kiosk writes and combining report totals. |
 
-## PostgreSQL monthly partitioning
+## Lab 1 — Partitioning kiosk transactions by month
 
-Partitioning splits one logical table into smaller parts. In this lab, each part stores one month of sales.
+**Partitioning** splits one logical table into smaller parts. PostgreSQL routes each sale by `transaction_date`.
 
-In [monthly-sales.sql](labs/partitioning/monthly-sales.sql), `kiosk_transactions` is the parent table. PostgreSQL routes each sale by `transaction_date`:
+```text
+Insert sale into kiosk_transactions
+  ├── January  → kiosk_transactions_jan
+  └── February → kiosk_transactions_feb
+```
 
-- `kiosk_transactions_jan` stores January sales.
-- `kiosk_transactions_feb` stores February sales.
+**Why it helps.** A January report can skip February. This is called **partition pruning**.
 
-From the project root, run the lab in PowerShell with Docker Desktop running:
+**ADM reports.** Query the parent table with a date filter. PostgreSQL chooses which partitions to scan.
+
+Run [monthly-sales.sql](labs/partitioning/monthly-sales.sql) from the project root in PowerShell with Docker Desktop running.
 
 ```powershell
 docker compose up -d postgres
 Get-Content -Raw .\labs\partitioning\monthly-sales.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lab -d products
 ```
 
-The script inserts four sales. The January query returns two rows: January 10 (20.00) and January 31 (30.00).
+The script inserts four sales. The January partition query returns January 10 (20.00) and January 31 (30.00).
 
-## Lab 2 — Read replicas for kiosk reporting
+## Lab 2 — Replication for kiosk sales reporting
 
-A **read replica** is a copy of the primary database that receives its changes and serves read queries. Kiosks save sales to the primary, and ADM reads from the replica to build reports.
+**Replication** maintains a copy of the primary database on another server. A **read replica** serves read queries using that copy.
 
 ```text
-Kiosk checkout ──writes sales──▶ Primary database
-                                       │
-                                 copies changes
-                                       ▼
-ADM reports ────read sales from──▶ Read replica
+Kiosk checkout   → Primary database → Saves sales
+                   Primary database → Copies changes to read replica
+ADM sales report → Read replica     → Reads sales
 ```
 
-**Benefit:** Running reports on the replica leaves the primary more capacity for checkout.
+**Why it helps.** Running reports on the replica leaves more capacity on the primary for checkout writes.
 
-**Trade-off:** A new sale may take a moment to appear in a report. This delay is called **replication lag**.
+**ADM reports.** A new sale may take a moment to appear. This delay is called **replication lag**.
+
+## Lab 3 — Sharding kiosk transactions by location
+
+**Sharding** distributes transactions across database servers. In this example, `location_id` is the **shard key**. It tells the application where to save each sale.
+
+```text
+Locations A and B → Shard 1 → Saves their transactions
+Locations C and D → Shard 2 → Saves their transactions
+```
+
+**Why it helps.** Checkout writes and storage are spread across servers. A very busy location can still overload its shard.
+
+**ADM reports.** A report for Location A reads from Shard 1. A report for all locations reads both shards and combines their totals. This is called **scatter-gather**.
 
 ## Redis and PostgreSQL
 
