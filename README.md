@@ -13,6 +13,25 @@ Hands-on system design exercises built with Java 21 and Spring Boot. Each lab im
 | Redis negative caching | Cache missing products for 25–35 seconds. Repeat requests return `404` without another PostgreSQL query. |
 | Redis TTL jitter | Vary the 30-second base TTL by up to five seconds in either direction. This spreads out expirations and helps reduce database load spikes. |
 | Redis rate limiting | Allow five product GET requests per client in a 60-second window. Redis runs a Lua script to update the counter and expiration atomically. |
+| PostgreSQL monthly partitioning | Route kiosk transactions into monthly partitions by sale date. |
+
+## PostgreSQL monthly partitioning
+
+Partitioning splits one logical table into smaller parts. In this lab, each part stores one month of sales.
+
+In [monthly-sales.sql](labs/partitioning/monthly-sales.sql), `kiosk_transactions` is the parent table. PostgreSQL routes each sale by `transaction_date`:
+
+- `kiosk_transactions_jan` stores January sales.
+- `kiosk_transactions_feb` stores February sales.
+
+From the project root, run the lab in PowerShell with Docker Desktop running:
+
+```powershell
+docker compose up -d postgres
+Get-Content -Raw .\labs\partitioning\monthly-sales.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lab -d products
+```
+
+The script inserts four sales. The January query returns two rows: January 10 (20.00) and January 31 (30.00).
 
 ## Redis and PostgreSQL
 
