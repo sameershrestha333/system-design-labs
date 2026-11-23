@@ -7,6 +7,10 @@ services:
       POSTGRES_PASSWORD: lab-local
     ports:
       - "127.0.0.1:5435:5432"
+  kafka:
+    image: apache/kafka:4.4.0
+    ports:
+      - "127.0.0.1:9092:9092"
 
   redis:
     image: redis:7

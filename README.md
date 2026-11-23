@@ -1,6 +1,6 @@
 # System Design Labs
 
-Hands-on system design exercises built with Java 21 and Spring Boot. Each lab implements a backend pattern and shows how to verify its behavior through API requests and application logs.
+Hands-on system design exercises built with Java 21 and Spring Boot. The labs use API requests, application logs, SQL queries, and design diagrams to explore backend patterns.
 
 ## Labs
 
@@ -16,6 +16,7 @@ Hands-on system design exercises built with Java 21 and Spring Boot. Each lab im
 | Lab 1 — PostgreSQL monthly partitioning | Route kiosk transactions into monthly partitions by sale date. |
 | Lab 2 — Read replicas | Design exercise on offloading ADM reports and understanding replica lag. |
 | Lab 3 — Location-based sharding | Design exercise on routing kiosk writes and combining report totals. |
+| Kafka Lab 1 — Kiosk sales with an outbox | Publish sale events to independent consumer groups and verify recovery after a Kafka outage. |
 
 ## Lab 1 — Partitioning kiosk transactions by month
 
@@ -66,6 +67,51 @@ Locations C and D → Shard 2 → Saves their transactions
 **Why it helps.** Checkout writes and storage are spread across servers. A very busy location can still overload its shard.
 
 **ADM reports.** A report for Location A reads from Shard 1. A report for all locations reads both shards and combines their totals. This is called **scatter-gather**.
+
+## Kafka Lab 1 — Kiosk sales with a transactional outbox
+
+Checkout saves the sale in `kiosk_sales` and its `SaleCompleted` event in `kiosk_sale_outbox` in one PostgreSQL transaction. The outbox publisher sends pending events to local Kafka using `saleId` as the key. It sets `published_at` after Kafka acknowledges the send.
+
+```mermaid
+flowchart LR
+    Checkout["POST /sales"] --> DB["One PostgreSQL transaction<br/>Save sale and outbox event"]
+    DB -->|"Commit succeeds"| Response["201 Created"]
+    DB -->|"Read pending events"| Publisher["Outbox publisher"]
+    Publisher -->|"Publish with saleId as key"| Topic["Local Kafka · SaleEvents topic<br/>Partition 0 and Partition 1"]
+    Topic -.->|"Broker acknowledges"| Mark["Publisher sets published_at"]
+    Topic --> ADM["adm-reporting consumer group"]
+    Topic --> Stock["inventory consumer group"]
+    Topic --> Receipts["receipts consumer group"]
+```
+
+Each event lands in one partition. Each consumer group tracks its own offset per partition. The consumers simulate ADM reporting, stock updates, and email or SMS delivery with logs.
+
+### Run the demo
+
+```powershell
+docker compose up -d postgres redis kafka
+.\mvnw.cmd spring-boot:run
+```
+
+Send **POST http://localhost:8080/sales** in Bruno with a JSON body.
+
+```json
+{
+  "amount": 20.00,
+  "itemSku": "SANDWICH",
+  "receiptType": "EMAIL"
+}
+```
+
+1. **Fan-out.** Expect `201 Created` with a `saleId`. All three consumers log the same sale, partition, and offset.
+2. **Receipt catch-up.** Send `POST /kafka-demo/receipts/stop`, then submit another sale. ADM and inventory still log it. Send `POST /kafka-demo/receipts/start` and verify receipts logs the missed sale.
+3. **Outbox recovery.** Keep Spring Boot and PostgreSQL running. Run `docker compose stop kafka` and submit a sale. It returns `201` and its outbox row has a blank `published_at`. Run `docker compose start kafka` and check again. The same outbox row now has a timestamp.
+
+Run this query before and after restarting Kafka. Replace `<saleId>` with the ID returned by checkout.
+
+```powershell
+docker compose exec postgres psql -U lab -d products -c "SELECT sale_id, event_id, published_at FROM kiosk_sale_outbox WHERE sale_id = '<saleId>';"
+```
 
 ## Redis and PostgreSQL
 
