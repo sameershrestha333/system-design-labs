@@ -17,6 +17,7 @@ Hands-on system design exercises built with Java 21 and Spring Boot. The labs us
 | Lab 2 — Read replicas | Design exercise on offloading ADM reports and understanding replica lag. |
 | Lab 3 — Location-based sharding | Design exercise on routing kiosk writes and combining report totals. |
 | Kafka Lab 1 — Kiosk sales with an outbox | Publish sale events to independent consumer groups and verify recovery after a Kafka outage. |
+| Kafka Lab 2 — Idempotent inventory consumer | Replay a sale event and verify that stock is deducted once. |
 
 ## Lab 1 — Partitioning kiosk transactions by month
 
@@ -81,10 +82,13 @@ flowchart LR
     Topic -.->|"Broker acknowledges"| Mark["Publisher sets published_at"]
     Topic --> ADM["adm-reporting consumer group"]
     Topic --> Stock["inventory consumer group"]
+    Stock --> Check{"Record eventId in PostgreSQL"}
+    Check -->|"New ID"| Deduct["Deduct stock in the same transaction"]
+    Check -->|"Existing ID"| Skip["Skip deduction"]
     Topic --> Receipts["receipts consumer group"]
 ```
 
-Each event lands in one partition. Each consumer group tracks its own offset per partition. The consumers simulate ADM reporting, stock updates, and email or SMS delivery with logs.
+Each event lands in one partition. Each consumer group tracks its own offset per partition. ADM reporting and email or SMS delivery are simulated with logs. The inventory consumer updates stock in PostgreSQL.
 
 ### Run the demo
 
@@ -111,6 +115,25 @@ Run this query before and after restarting Kafka. Replace `<saleId>` with the ID
 
 ```powershell
 docker compose exec postgres psql -U lab -d products -c "SELECT sale_id, event_id, published_at FROM kiosk_sale_outbox WHERE sale_id = '<saleId>';"
+```
+
+## Kafka Lab 2 — Idempotent inventory consumer
+
+The inventory consumer records the `eventId` in `kiosk_inventory_processed_events` and deducts one item from `kiosk_inventory` in one PostgreSQL transaction. An existing event ID skips the deduction. A failed deduction rolls back the event ID insert so a retry can still apply it.
+
+Submit a `SANDWICH` sale using the Lab 1 request and wait for `STOCK_DEDUCTED`. Copy the returned sale ID. In PowerShell, republish its original outbox payload to keep the same `eventId` and Kafka key.
+
+```powershell
+$saleId = '<saleId>'
+$payload = docker compose exec -T postgres psql -U lab -d products -At -c "SELECT payload::text FROM kiosk_sale_outbox WHERE sale_id = '$saleId';"
+if ($LASTEXITCODE -ne 0 -or -not $payload) { throw 'Could not read the outbox event.' }
+"${saleId}:$payload" | docker compose exec -T kafka /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic SaleEvents --property parse.key=true --property key.separator=:
+```
+
+Expect `DUPLICATE_SKIPPED` for the same event ID at a new offset. Starting from the seed quantity of 10, the first delivery leaves 9 and the replay leaves 9. Check stock before and after replay.
+
+```powershell
+docker compose exec postgres psql -U lab -d products -c "SELECT item_sku, quantity FROM kiosk_inventory WHERE item_sku = 'SANDWICH';"
 ```
 
 ## Redis and PostgreSQL

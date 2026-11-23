@@ -21,3 +21,16 @@ CREATE TABLE IF NOT EXISTS kiosk_sale_outbox (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     published_at TIMESTAMPTZ
 );
+
+CREATE TABLE IF NOT EXISTS kiosk_inventory (
+    item_sku TEXT PRIMARY KEY,
+    quantity INTEGER NOT NULL CHECK (quantity >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS kiosk_inventory_processed_events (
+    event_id UUID PRIMARY KEY
+);
+
+INSERT INTO kiosk_inventory (item_sku, quantity)
+VALUES ('SANDWICH', 10)
+ON CONFLICT (item_sku) DO NOTHING;
