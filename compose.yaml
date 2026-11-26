@@ -2,7 +2,7 @@ services:
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_DB: products
+      POSTGRES_DB: retail_kiosk_lab
       POSTGRES_USER: lab
       POSTGRES_PASSWORD: lab-local
     ports:

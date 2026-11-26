@@ -19,6 +19,16 @@ Hands-on system design exercises built with Java 21 and Spring Boot. The labs us
 | Kafka Lab 1 — Kiosk sales with an outbox | Publish sale events to independent consumer groups and verify recovery after a Kafka outage. |
 | Kafka Lab 2 — Idempotent inventory consumer | Replay a sale event and verify that stock is deducted once. |
 
+### Existing PostgreSQL volume
+
+If this project already initialized PostgreSQL with the `products` database, stop the Spring Boot app and close sessions connected to that database. Start PostgreSQL with `docker compose up -d postgres`, then rename the database in place to keep its tables and data.
+
+```powershell
+docker compose exec postgres psql -X -v ON_ERROR_STOP=1 -U lab -d postgres -c "ALTER DATABASE products RENAME TO retail_kiosk_lab;"
+```
+
+A fresh volume initializes `retail_kiosk_lab` automatically.
+
 ## Lab 1 — Partitioning kiosk transactions by month
 
 **Partitioning** splits one logical table into smaller parts. PostgreSQL routes each sale by `transdate`.
@@ -37,8 +47,8 @@ Run [salesheader.sql](labs/salesheader.sql) to create the shared parent table, t
 
 ```powershell
 docker compose up -d postgres
-Get-Content -Raw .\labs\salesheader.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lab -d products
-Get-Content -Raw .\labs\partitioning\monthly-sales.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lab -d products
+Get-Content -Raw .\labs\salesheader.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lab -d retail_kiosk_lab
+Get-Content -Raw .\labs\partitioning\monthly-sales.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lab -d retail_kiosk_lab
 ```
 
 Run this setup once per database. The parent table, monthly partitions, and sample sales persist after the session ends. The script inserts four sales. The January partition query returns January 10 (20.00) and January 31 (30.00).
@@ -115,7 +125,7 @@ Send **POST http://localhost:8080/sales** in Bruno with a JSON body.
 Run this query before and after restarting Kafka. Replace `<saleId>` with the ID returned by checkout.
 
 ```powershell
-docker compose exec postgres psql -U lab -d products -c "SELECT sale_id, event_id, published_at FROM kiosk_sale_outbox WHERE sale_id = '<saleId>';"
+docker compose exec postgres psql -U lab -d retail_kiosk_lab -c "SELECT sale_id, event_id, published_at FROM kiosk_sale_outbox WHERE sale_id = '<saleId>';"
 ```
 
 ## Kafka Lab 2 — Idempotent inventory consumer
@@ -126,7 +136,7 @@ Submit a `SANDWICH` sale using the Lab 1 request and wait for `STOCK_DEDUCTED`. 
 
 ```powershell
 $saleId = '<saleId>'
-$payload = docker compose exec -T postgres psql -U lab -d products -At -c "SELECT payload::text FROM kiosk_sale_outbox WHERE sale_id = '$saleId';"
+$payload = docker compose exec -T postgres psql -U lab -d retail_kiosk_lab -At -c "SELECT payload::text FROM kiosk_sale_outbox WHERE sale_id = '$saleId';"
 if ($LASTEXITCODE -ne 0 -or -not $payload) { throw 'Could not read the outbox event.' }
 "${saleId}:$payload" | docker compose exec -T kafka /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic SaleEvents --property parse.key=true --property key.separator=:
 ```
@@ -134,7 +144,7 @@ if ($LASTEXITCODE -ne 0 -or -not $payload) { throw 'Could not read the outbox ev
 Expect `DUPLICATE_SKIPPED` for the same event ID at a new offset. Starting from the seed quantity of 10, the first delivery leaves 9 and the replay leaves 9. Check stock before and after replay.
 
 ```powershell
-docker compose exec postgres psql -U lab -d products -c "SELECT item_sku, quantity FROM kiosk_inventory WHERE item_sku = 'SANDWICH';"
+docker compose exec postgres psql -U lab -d retail_kiosk_lab -c "SELECT item_sku, quantity FROM kiosk_inventory WHERE item_sku = 'SANDWICH';"
 ```
 
 ## Redis and PostgreSQL
