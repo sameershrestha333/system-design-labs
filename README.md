@@ -33,14 +33,15 @@ Insert sale into salesheader
 
 **ADM reports.** Query the parent table with a date filter. PostgreSQL chooses which partitions to scan.
 
-Run [monthly-sales.sql](labs/partitioning/monthly-sales.sql) from the project root in PowerShell with Docker Desktop running.
+Run [salesheader.sql](labs/salesheader.sql) to create the shared parent table, then run [monthly-sales.sql](labs/partitioning/monthly-sales.sql) to create the partitions and load the sample sales. Use PowerShell from the project root with Docker Desktop running.
 
 ```powershell
 docker compose up -d postgres
+Get-Content -Raw .\labs\salesheader.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lab -d products
 Get-Content -Raw .\labs\partitioning\monthly-sales.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lab -d products
 ```
 
-The script inserts four sales. The January partition query returns January 10 (20.00) and January 31 (30.00).
+Run this setup once per database. The parent table, monthly partitions, and sample sales persist after the session ends. The script inserts four sales. The January partition query returns January 10 (20.00) and January 31 (30.00).
 
 ## Lab 2 — Replication for kiosk sales reporting
 
