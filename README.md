@@ -16,6 +16,7 @@ Hands-on system design exercises built with Java 21 and Spring Boot. The labs us
 | Lab 1 — PostgreSQL monthly partitioning | Route kiosk transactions into monthly partitions by sale date. |
 | Lab 2 — Read replicas | Design exercise on offloading ADM reports and understanding replica lag. |
 | Lab 3 — Location-based sharding | Design exercise on routing kiosk writes and combining report totals. |
+| Lab 4 — Composite indexing | Search sales by location and date on the shared salesheader table. |
 | Kafka Lab 1 — Kiosk sales with an outbox | Publish sale events to independent consumer groups and verify recovery after a Kafka outage. |
 | Kafka Lab 2 — Idempotent inventory consumer | Replay a sale event and verify that stock is deducted once. |
 
@@ -79,6 +80,42 @@ Locations C and D → Shard 2 → Saves their transactions
 **Why it helps.** Checkout writes and storage are spread across servers. A very busy location can still overload its shard.
 
 **ADM reports.** A report for Location A reads from Shard 1. A report for all locations reads both shards and combines their totals. This is called **scatter-gather**.
+
+## Lab 4 — Indexing ADM transaction search
+
+Run the partitioning setup first so `salesheader` and its sample sales exist. Run the query below in `psql` before adding the index.
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT transid, location, transdate, total
+FROM salesheader
+WHERE location = '101'
+  AND transdate >= TIMESTAMP '2026-01-01'
+  AND transdate <  TIMESTAMP '2026-02-01'
+ORDER BY transdate;
+```
+
+From PowerShell, apply [index.sql](labs/indexing/index.sql).
+
+```powershell
+Get-Content -Raw .\labs\indexing\index.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lab -d retail_kiosk_lab
+```
+
+In `psql`, run `\d salesheader` to verify the index on `(location, transdate)` and repeat the query. Both plans should return one matching sale. PostgreSQL may use a sequential scan with the four sample sales.
+
+To see index usage, run the following in the same `psql` session, repeat the query above, then run `ROLLBACK;` to remove the test rows.
+
+```sql
+BEGIN;
+
+INSERT INTO salesheader (transid, transdate, location, total)
+SELECT 'INDEX-DEMO-' || n, TIMESTAMP '2026-01-15', '999', 20.00
+FROM generate_series(1, 50000) AS test(n);
+
+ANALYZE salesheader_jan;
+```
+
+Look for an index-based scan and an `Index Cond` for the location and date range.
 
 ## Kafka Lab 1 — Kiosk sales with a transactional outbox
 
