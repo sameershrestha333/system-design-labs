@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -26,17 +27,26 @@ public class KioskSaleController {
         var amount = request.amount();
         var receiptType = request.receiptType();
 
-        if (amount == null || amount.signum() <= 0
-                || request.itemSku() == null || request.itemSku().isBlank()
-                || (!"EMAIL".equals(receiptType) && !"SMS".equals(receiptType))) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Provide a positive amount, an item SKU, and EMAIL or SMS.");
+        var itemSkus = request.itemSkus();
+        if (request.itemSku() != null) {
+            if (itemSkus != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Provide itemSku or itemSkus.");
+            }
+            itemSkus = List.of(request.itemSku());
         }
 
-        return new SaleResponse(sales.completeSale(amount, request.itemSku(), receiptType));
+        if (amount == null || amount.signum() <= 0
+                || itemSkus == null || itemSkus.isEmpty()
+                || itemSkus.stream().anyMatch(sku -> sku == null || sku.isBlank())
+                || (!"EMAIL".equals(receiptType) && !"SMS".equals(receiptType))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Provide a positive amount, at least one nonblank SKU, and EMAIL or SMS.");
+        }
+
+        return new SaleResponse(sales.completeSale(amount, itemSkus, receiptType));
     }
 
-    public record SaleRequest(BigDecimal amount, String itemSku, String receiptType) {}
+    public record SaleRequest(BigDecimal amount, String itemSku, String receiptType, List<String> itemSkus) {}
 
     public record SaleResponse(UUID saleId) {}
 

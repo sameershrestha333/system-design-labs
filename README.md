@@ -16,7 +16,7 @@ Hands-on system design exercises built with Java 21 and Spring Boot. The labs us
 | Lab 1 — PostgreSQL monthly partitioning | Route kiosk transactions into monthly partitions by sale date. |
 | Lab 2 — Read replicas | Design exercise on offloading ADM reports and understanding replica lag. |
 | Lab 3 — Location-based sharding | Design exercise on routing kiosk writes and combining report totals. |
-| Lab 4 — Composite indexing | Search sales by location and date on the shared salesheader table. |
+| Lab 4 — Composite indexing | Search sales by location and date on the shared partitioning demo table. |
 | Kafka Lab 1 — Kiosk sales with an outbox | Publish sale events to independent consumer groups and verify recovery after a Kafka outage. |
 | Kafka Lab 2 — Idempotent inventory consumer | Replay a sale event and verify that stock is deducted once. |
 
@@ -30,21 +30,23 @@ docker compose exec postgres psql -X -v ON_ERROR_STOP=1 -U lab -d postgres -c "A
 
 A fresh volume initializes `retail_kiosk_lab` automatically.
 
+Application and lab tables use the `kskdb` schema. For interactive SQL, run `SET search_path TO kskdb;` once per psql session to use unqualified table names.
+
 ## Lab 1 — Partitioning kiosk transactions by month
 
 **Partitioning** splits one logical table into smaller parts. PostgreSQL routes each sale by `transdate`.
 
 ```text
-Insert sale into salesheader
-  ├── January  → salesheader_jan
-  └── February → salesheader_feb
+Insert sale into kskdb.salesheader_partition_demo
+  ├── January  → kskdb.salesheader_jan
+  └── February → kskdb.salesheader_feb
 ```
 
 **Why it helps.** A January report can skip February. This is called **partition pruning**.
 
 **ADM reports.** Query the parent table with a date filter. PostgreSQL chooses which partitions to scan.
 
-Run [salesheader.sql](labs/salesheader.sql) to create the shared parent table, then run [monthly-sales.sql](labs/partitioning/monthly-sales.sql) to create the partitions and load the sample sales. Use PowerShell from the project root with Docker Desktop running.
+Run [salesheader.sql](labs/salesheader.sql) to set up the shared parent table, `kskdb.salesheader_partition_demo`, and move any existing lab rows into `kskdb`, then run [monthly-sales.sql](labs/partitioning/monthly-sales.sql) to create the partitions and load the sample sales. Use PowerShell from the project root with Docker Desktop running.
 
 ```powershell
 docker compose up -d postgres
@@ -52,7 +54,7 @@ Get-Content -Raw .\labs\salesheader.sql | docker compose exec -T postgres psql -
 Get-Content -Raw .\labs\partitioning\monthly-sales.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lab -d retail_kiosk_lab
 ```
 
-Run this setup once per database. The parent table, monthly partitions, and sample sales persist after the session ends. The script inserts four sales. The January partition query returns January 10 (20.00) and January 31 (30.00).
+Run both setup scripts in order. The parent table, monthly partitions, and sample sales persist after the session ends. The script seeds four sample sales on a fresh setup. The January partition query returns January 10 (20.00) and January 31 (30.00).
 
 ## Lab 2 — Replication for kiosk sales reporting
 
@@ -83,12 +85,12 @@ Locations C and D → Shard 2 → Saves their transactions
 
 ## Lab 4 — Indexing ADM transaction search
 
-Run the partitioning setup first so `salesheader` and its sample sales exist. Run the query below in `psql` before adding the index.
+Run the partitioning setup first so `kskdb.salesheader_partition_demo` and its sample sales exist. Run the query below in `psql` before adding the index.
 
 ```sql
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT transid, location, transdate, total
-FROM salesheader
+FROM kskdb.salesheader_partition_demo
 WHERE location = '101'
   AND transdate >= TIMESTAMP '2026-01-01'
   AND transdate <  TIMESTAMP '2026-02-01'
@@ -101,39 +103,49 @@ From PowerShell, apply [index.sql](labs/indexing/index.sql).
 Get-Content -Raw .\labs\indexing\index.sql | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 -U lab -d retail_kiosk_lab
 ```
 
-In `psql`, run `\d salesheader` to verify the index on `(location, transdate)` and repeat the query. Both plans should return one matching sale. PostgreSQL may use a sequential scan with the four sample sales.
+In `psql`, run `\d kskdb.salesheader_partition_demo` to verify the index on `(location, transdate)` and repeat the query. Both plans should return one matching sale. PostgreSQL may use a sequential scan with the four sample sales.
 
 To see index usage, run the following in the same `psql` session, repeat the query above, then run `ROLLBACK;` to remove the test rows.
 
 ```sql
 BEGIN;
 
-INSERT INTO salesheader (transid, transdate, location, total)
+INSERT INTO kskdb.salesheader_partition_demo (transid, transdate, location, total)
 SELECT 'INDEX-DEMO-' || n, TIMESTAMP '2026-01-15', '999', 20.00
 FROM generate_series(1, 50000) AS test(n);
 
-ANALYZE salesheader_jan;
+ANALYZE kskdb.salesheader_jan;
 ```
 
 Look for an index-based scan and an `Index Cond` for the location and date range.
 
 ## Kafka Lab 1 — Kiosk sales with a transactional outbox
 
-Checkout saves the sale in `kiosk_sales` and its `SaleCompleted` event in `kiosk_sale_outbox` in one PostgreSQL transaction. The outbox publisher sends pending events to local Kafka using `saleId` as the key. It sets `published_at` after Kafka acknowledges the send.
+Checkout saves one header in `kskdb.salesheader`, a JDBC batch of line items in `kskdb.salesitem`, and one `SaleCompleted` event in `kskdb.kiosk_sale_outbox` in one PostgreSQL transaction. Each line item links to its header by `sale_id` and defaults to quantity 1. On startup, the schema migrates existing sales and backfills line items for legacy single-SKU sales. The outbox publisher sends pending events to local Kafka using `saleId` as the key. It sets `published_at` after Kafka acknowledges the send.
 
 ```mermaid
 flowchart LR
-    Checkout["POST /sales"] --> DB["One PostgreSQL transaction<br/>Save sale and outbox event"]
-    DB -->|"Commit succeeds"| Response["201 Created"]
-    DB -->|"Read pending events"| Publisher["Outbox publisher"]
-    Publisher -->|"Publish with saleId as key"| Topic["Local Kafka · SaleEvents topic<br/>Partition 0 and Partition 1"]
-    Topic -.->|"Broker acknowledges"| Mark["Publisher sets published_at"]
-    Topic --> ADM["adm-reporting consumer group"]
-    Topic --> Stock["inventory consumer group"]
-    Stock --> Check{"Record eventId in PostgreSQL"}
-    Check -->|"New ID"| Deduct["Deduct stock in the same transaction"]
-    Check -->|"Existing ID"| Skip["Skip deduction"]
-    Topic --> Receipts["receipts consumer group"]
+    Request["POST /sales"] --> Header
+    subgraph Checkout["Checkout PostgreSQL transaction"]
+        Header["Insert 1 sale header"] --> Items["Batch-insert line items"]
+        Items --> Event["Insert 1 SaleCompleted outbox event"]
+        Event --> Commit["Commit"]
+    end
+    Commit --> Response["201 Created"]
+    Commit --> Pending["Committed outbox row"]
+    Pending --> Publisher["Outbox publisher"]
+    Publisher -->|"Publish using sale ID as key"| Kafka["Kafka SaleEvents"]
+    Kafka -.->|"Broker acknowledgment"| Published["Publisher sets published_at"]
+    Kafka --> ADM["ADM reporting"]
+    Kafka --> Receipts["Receipt delivery"]
+    Kafka --> Inventory["Inventory consumer"]
+    subgraph Stock["Inventory PostgreSQL transaction"]
+        Claim{"Can insert event ID?"}
+        Claim -->|"New event ID"| Deduct["Deduct stock for all SKUs"]
+        Deduct --> Done["Commit deductions and event ID"]
+        Claim -->|"Already processed"| Skip["Skip deductions"]
+    end
+    Inventory --> Claim
 ```
 
 Each event lands in one partition. Each consumer group tracks its own offset per partition. ADM reporting and email or SMS delivery are simulated with logs. The inventory consumer updates stock in PostgreSQL.
@@ -162,26 +174,49 @@ Send **POST http://localhost:8080/sales** in Bruno with a JSON body.
 Run this query before and after restarting Kafka. Replace `<saleId>` with the ID returned by checkout.
 
 ```powershell
-docker compose exec postgres psql -U lab -d retail_kiosk_lab -c "SELECT sale_id, event_id, published_at FROM kiosk_sale_outbox WHERE sale_id = '<saleId>';"
+docker compose exec postgres psql -U lab -d retail_kiosk_lab -c "SELECT sale_id, event_id, published_at FROM kskdb.kiosk_sale_outbox WHERE sale_id = '<saleId>';"
 ```
+
+### Multi-item checkout
+
+Send `POST /sales` with `itemSkus` to save several line items under one sale ID. Each list entry represents one unit. For this example, check that inventory has at least five sandwiches.
+
+```json
+{
+  "amount": 25.00,
+  "itemSkus": ["SANDWICH", "SANDWICH", "SANDWICH", "SANDWICH", "SANDWICH"],
+  "receiptType": "EMAIL"
+}
+```
+
+Use the returned sale ID in this SQL query.
+
+```sql
+SELECT
+    (SELECT count(*) FROM kskdb.salesheader WHERE sale_id = '<saleId>') AS headers,
+    (SELECT count(*) FROM kskdb.salesitem WHERE sale_id = '<saleId>') AS items,
+    (SELECT count(*) FROM kskdb.kiosk_sale_outbox WHERE sale_id = '<saleId>') AS events;
+```
+
+Expect **1 header, 5 items, and 1 event**. After `STOCK_DEDUCTED`, stock should be five units lower. Replay the original event using its sale ID in Lab 2 and check that stock stays at the same quantity.
 
 ## Kafka Lab 2 — Idempotent inventory consumer
 
-The inventory consumer records the `eventId` in `kiosk_inventory_processed_events` and deducts one item from `kiosk_inventory` in one PostgreSQL transaction. An existing event ID skips the deduction. A failed deduction rolls back the event ID insert so a retry can still apply it.
+The inventory consumer records the `eventId` in `kskdb.kiosk_inventory_processed_events` and applies all stock deductions to `kskdb.kiosk_inventory` in one PostgreSQL transaction. An existing event ID skips the deduction. A failed deduction rolls back the event ID insert so a retry can still apply it.
 
 Submit a `SANDWICH` sale using the Lab 1 request and wait for `STOCK_DEDUCTED`. Copy the returned sale ID. In PowerShell, republish its original outbox payload to keep the same `eventId` and Kafka key.
 
 ```powershell
 $saleId = '<saleId>'
-$payload = docker compose exec -T postgres psql -U lab -d retail_kiosk_lab -At -c "SELECT payload::text FROM kiosk_sale_outbox WHERE sale_id = '$saleId';"
+$payload = docker compose exec -T postgres psql -U lab -d retail_kiosk_lab -At -c "SELECT payload::text FROM kskdb.kiosk_sale_outbox WHERE sale_id = '$saleId';"
 if ($LASTEXITCODE -ne 0 -or -not $payload) { throw 'Could not read the outbox event.' }
 "${saleId}:$payload" | docker compose exec -T kafka /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic SaleEvents --property parse.key=true --property key.separator=:
 ```
 
-Expect `DUPLICATE_SKIPPED` for the same event ID at a new offset. Starting from the seed quantity of 10, the first delivery leaves 9 and the replay leaves 9. Check stock before and after replay.
+Expect `DUPLICATE_SKIPPED` for the same event ID at a new offset. Check stock before checkout, after the first delivery, and after replay. The first delivery deducts the number of units in the sale. The replay leaves that quantity unchanged.
 
 ```powershell
-docker compose exec postgres psql -U lab -d retail_kiosk_lab -c "SELECT item_sku, quantity FROM kiosk_inventory WHERE item_sku = 'SANDWICH';"
+docker compose exec postgres psql -U lab -d retail_kiosk_lab -c "SELECT item_sku, quantity FROM kskdb.kiosk_inventory WHERE item_sku = 'SANDWICH';"
 ```
 
 ## Redis and PostgreSQL
@@ -198,7 +233,7 @@ docker compose ps
 .\mvnw.cmd spring-boot:run
 ```
 
-The API runs at `http://localhost:8080`. On startup, Spring Boot creates the products table and seeds product `123` with the name **Mechanical Keyboard** on a fresh database.
+The API runs at `http://localhost:8080`. On startup, Spring Boot creates the `kskdb.products` table and seeds product `123` with the name **Mechanical Keyboard** on a fresh database.
 
 ## Try it in Bruno
 

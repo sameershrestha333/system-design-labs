@@ -26,7 +26,7 @@ public class SaleOutboxPublisher {
     public void publishPendingSales() throws Exception {
         var events = jdbc.query("""
                 SELECT event_id, sale_id, payload::text AS payload
-                FROM kiosk_sale_outbox
+                FROM kskdb.kiosk_sale_outbox
                 WHERE published_at IS NULL
                 ORDER BY created_at, event_id
                 LIMIT 10
@@ -43,7 +43,7 @@ public class SaleOutboxPublisher {
             ).get(10, TimeUnit.SECONDS);
 
             jdbc.update("""
-                    UPDATE kiosk_sale_outbox
+                    UPDATE kskdb.kiosk_sale_outbox
                     SET published_at = CURRENT_TIMESTAMP
                     WHERE event_id = ?
                     """, event.eventId());

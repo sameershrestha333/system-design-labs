@@ -25,7 +25,7 @@ public class ProductService {
     public Product findById(long id) {
         log.info("findById: Cache miss for product {}. Querying PostgreSQL.", id);
         return jdbc.query(
-                "SELECT id, name FROM products WHERE id = ?",
+                "SELECT id, name FROM kskdb.products WHERE id = ?",
                 (rs, rowNum) -> new Product(rs.getLong("id"), rs.getString("name")),
                 id
         ).stream().findFirst().orElse(null);
@@ -34,7 +34,7 @@ public class ProductService {
     @CachePut(cacheNames = "products", key = "#p0", unless = "#result == null")
     public Optional<Product> updateName(long id, String name) {
         int updatedRows = jdbc.update(
-                "UPDATE products SET name = ? WHERE id = ?",
+                "UPDATE kskdb.products SET name = ? WHERE id = ?",
                 name, id
         );
 

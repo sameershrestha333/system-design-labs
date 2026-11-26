@@ -6,6 +6,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
+import java.util.TreeMap;
 import java.util.UUID;
 
 @Service
@@ -20,35 +22,39 @@ public class KioskInventoryService {
     }
 
     @Transactional
-    public boolean applySale(UUID eventId, String itemSku) {
-        log.info("applySale: Checking eventId={} itemSku={}", eventId, itemSku);
+    public boolean applySale(UUID eventId, List<String> itemSkus) {
+        log.info("applySale: Checking eventId={} itemSkus={}", eventId, itemSkus);
 
         int inserted = jdbc.update("""
-                INSERT INTO kiosk_inventory_processed_events (event_id)
+                INSERT INTO kskdb.kiosk_inventory_processed_events (event_id)
                 VALUES (?)
                 ON CONFLICT (event_id) DO NOTHING
                 """, eventId);
 
         if (inserted == 0) {
-            log.info("applySale: Duplicate9++++ eventId={} itemSku={}; skipping stock deduction",
-                    eventId, itemSku);
+            log.info("applySale: Duplicate eventId={} itemSkus={}; skipping stock deduction",
+                    eventId, itemSkus);
             return false;
         }
 
-        int updated = jdbc.update("""
-                UPDATE kiosk_inventory
-                SET quantity = quantity - 1
-                WHERE item_sku = ? AND quantity > 0
-                """, itemSku);
-
-        if (updated == 0) {
-            log.warn("applySale: No available stock for itemSku={} eventId={}; rolling back",
-                    itemSku, eventId);
-            throw new IllegalStateException("No available stock for SKU " + itemSku);
+        // Combine repeated SKUs and update stock in a consistent order.
+        var quantities = new TreeMap<String, Integer>();
+        for (var sku : itemSkus) {
+            quantities.merge(sku, 1, Integer::sum);
         }
 
-        log.info("applySale: Stock update succeeded for eventId={} itemSku={} deducted=1; awaiting commit",
-                eventId, itemSku);
+        for (var item : quantities.entrySet()) {
+            int updated = jdbc.update("""
+                    UPDATE kskdb.kiosk_inventory
+                    SET quantity = quantity - ?
+                    WHERE item_sku = ? AND quantity >= ?
+                    """, item.getValue(), item.getKey(), item.getValue());
+
+            if (updated == 0) {
+                // The exception rolls back every deduction and the processed-event record.
+                throw new IllegalStateException("Insufficient stock for SKU " + item.getKey());
+            }
+        }
         return true;
     }
 }

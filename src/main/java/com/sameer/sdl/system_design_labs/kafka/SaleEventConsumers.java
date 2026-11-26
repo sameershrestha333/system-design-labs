@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import com.sameer.sdl.system_design_labs.service.KioskInventoryService;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
 import java.util.UUID;
 
 @Component
@@ -34,19 +35,37 @@ public class SaleEventConsumers {
     public void updateInventory(ConsumerRecord<String, String> event) {
         var payload = objectMapper.readTree(event.value());
         var eventId = UUID.fromString(payload.get("eventId").asText());
-        var itemSku = payload.get("itemSku").asText();
+        var itemSkus = new ArrayList<String>();
+        var items = payload.get("itemSkus");
+        if (items == null) {
+            items = payload.get("itemSku");
+            if (items != null && items.isTextual()) {
+                itemSkus.add(items.asText());
+            }
+        } else if (items.isArray()) {
+            for (var item : items) {
+                if (!item.isTextual()) {
+                    throw new IllegalArgumentException("Expected a SKU string");
+                }
+                itemSkus.add(item.asText());
+            }
+        }
 
-        log.info("updateInventory: Received eventId={} saleId={} itemSku={} partition={} offset={}",
-                eventId, event.key(), itemSku, event.partition(), event.offset());
+        if (itemSkus.isEmpty() || itemSkus.stream().anyMatch(String::isBlank)) {
+            throw new IllegalArgumentException("Sale event requires at least one SKU");
+        }
 
-        boolean applied = inventory.applySale(eventId, itemSku);
+        log.info("updateInventory: Received eventId={} saleId={} itemSkus={} partition={} offset={}",
+                eventId, event.key(), itemSkus, event.partition(), event.offset());
+
+        boolean applied = inventory.applySale(eventId, itemSkus);
 
         if (applied) {
-            log.info("updateInventory: STOCK_DEDUCTED eventId={} itemSku={} deducted=1; transaction committed",
-                    eventId, itemSku);
+            log.info("updateInventory: STOCK_DEDUCTED eventId={} itemSkus={}; transaction committed",
+                    eventId, itemSkus);
         } else {
-            log.info("updateInventory: DUPLICATE_SKIPPED eventId={} itemSku={} offset={}",
-                    eventId, itemSku, event.offset());
+            log.info("updateInventory: DUPLICATE_SKIPPED eventId={} itemSkus={} offset={}",
+                    eventId, itemSkus, event.offset());
         }
     }
 
