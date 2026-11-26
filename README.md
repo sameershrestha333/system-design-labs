@@ -21,12 +21,12 @@ Hands-on system design exercises built with Java 21 and Spring Boot. The labs us
 
 ## Lab 1 — Partitioning kiosk transactions by month
 
-**Partitioning** splits one logical table into smaller parts. PostgreSQL routes each sale by `transaction_date`.
+**Partitioning** splits one logical table into smaller parts. PostgreSQL routes each sale by `transdate`.
 
 ```text
-Insert sale into kiosk_transactions
-  ├── January  → kiosk_transactions_jan
-  └── February → kiosk_transactions_feb
+Insert sale into salesheader
+  ├── January  → salesheader_jan
+  └── February → salesheader_feb
 ```
 
 **Why it helps.** A January report can skip February. This is called **partition pruning**.
